@@ -1,0 +1,210 @@
+############################################
+#### Author: Dan Gustavson & Aysu Okbay ####
+#### Date:   November 13 2023           ####
+############################################
+
+
+###################################################################################
+#### PART 1  (COMMANDS ON RC)                                                   ###
+### These commands merge the filtered CATSLife data with 1000 Genomes phase 3   ###
+###     It then determines ancestry gropus based on +/- 5 SD                    ###
+###################################################################################
+## PART 2 is an R script 
+###################################################################################
+
+# Ancestry reference file
+/pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/1000Gph3_HM3.bim
+
+# CATSLife filtered file
+/pl/active/IBG/dang/CATSLife_PGSs/CATSLife_hrc_filtered_Oct_2023.bed
+
+# Merge 1kg phase 3 with our data
+plink --bfile /pl/active/IBG/dang/CATSLife_PGSs/CATSLife_hrc_filtered_Oct_2023 \
+--bmerge /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/1000Gph3_HM3 \
+--geno .01 --make-bed --out /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATSmerged_to_1000G
+
+# check the lines with wc -l (we are at about 500k which is a bit low but okay)
+wc -l /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATSmerged_to_1000G
+
+# create file with fam and iid and where they came from 
+awk '$1=="0"{print $1,$2,"1000G";next} \
+{print $1,$2,"CATSLife"}' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATSmerged_to_1000G.fam > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATSLife_1kG_HM3.clusters
+
+# using merged file it recreates PCs with only 1000kg and projecting our sample to those PCs
+plink --bfile /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATSmerged_to_1000G \
+--maf 0.01 \
+--within /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATSLife_1kG_HM3.clusters \
+--pca 4 \
+--pca-cluster-names 1000G \
+--out /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs
+
+# replaces spaces with tabs
+sed -i 's/ /\t/g' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec
+
+# Add 2 columns to PC file - if 1KG it adds population and superpopulation - for our cohort just add name
+awk -F"\t" 'BEGIN{OFS="\t";print "FID","IID","PC1","PC2","PC3","PC4","POP","SUPERPOP"} \
+NR==FNR{a[$1]=$4OFS$6;next} \
+$2 in a{print $0,a[$2];next} \
+!($1~"#"){print $0,"CATSLife","CATSLife"}' OFS="\t" igsr_samples.tsv /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated
+
+##################################################################
+# Move to Part 2A:                                               #
+#     Run the R script to see how the plots look                 #
+#     You'll see where our samples spread on the existing PCs    #
+#                                                                #
+# Next we will actually determine which gropus are which         #
+##################################################################
+####################    EUROPEAN ANCESTRY    #####################
+##################################################################
+
+# Determine the means based on the 1KG EUR population
+means=($(awk -F"\t" -v ancestry="EUR" '$8==ancestry && NR>1 {count++; sum1=sum1+$3; sum2=sum2+$4; sum3=sum3+$5; sum4=sum4+$6}
+            END{print sum1/count, sum2/count, sum3/count, sum4/count}' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated))
+
+
+# Calculate limits (5 SD in this case) 
+limits=($(awk -F"\t" -v ancestry="EUR" -v k=5 -v mean1=${means[0]} -v mean2=${means[1]} -v mean3=${means[2]} -v mean4=${means[3]} '
+            $8==ancestry && NR>1 {count++; sum1=sum1+($3-mean1)^2;  sum2=sum2+($4-mean2)^2; sum3=sum3+($5-mean3)^2; sum4=sum4+($6-mean4)^2} 
+            END{print mean1-k*sqrt(sum1/(count-1)), mean1+k*sqrt(sum1/(count-1)), mean2-k*sqrt(sum2/(count-1)), mean2+k*sqrt(sum2/(count-1)), mean3-k*sqrt(sum3/(count-1)), mean3+k*sqrt(sum3/(count-1)), mean4-k*sqrt(sum4/(count-1)), mean4+k*sqrt(sum4/(count-1))}' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated))
+
+
+# Filter
+awk -F"\t" -v l1=${limits[0]} -v u1=${limits[1]} -v l2=${limits[2]} -v u2=${limits[3]} -v l3=${limits[4]} -v u3=${limits[5]} -v l4=${limits[6]} -v u4=${limits[7]}  \
+'$1=="0" || ($3>l1 && $3<u1 && $4>l2 && $4<u2 && $5>l3 && $5<u3 && $6>l4 && $6<u4) {print $1,$2,$3,$4,$5,$6}' OFS="\t" /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_EUR_1kG_HM3_PCs.eigenvec
+
+# Run command to annotate the new file
+awk -F"\t" 'BEGIN{OFS="\t";print "FID","IID","PC1","PC2","PC3","PC4","POP","SUPERPOP"} \
+NR==FNR{a[$1]=$4OFS$6;next} \
+$2 in a{print $0,a[$2];next} \
+!($1~"#"){print $0,"CATSLife","CATSLife"}' OFS="\t" igsr_samples.tsv /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_EUR_1kG_HM3_PCs.eigenvec > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_EUR_1kG_HM3_PCs.eigenvec.annotated
+
+#
+awk -F"\t" '$1!=0{print $1,$2}' OFS="\t" /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_EUR_1kG_HM3_PCs.eigenvec > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_EUR_FID_IID.txt
+
+
+###################################################################
+####################    EAST ASIAN ANCESTRY    ####################
+###################################################################
+
+# Next run these commands to actually do it based on SDs
+means=($(awk -F"\t" -v ancestry="EAS" '$8==ancestry && NR>1 {count++; sum1=sum1+$3; sum2=sum2+$4; sum3=sum3+$5; sum4=sum4+$6}
+            END{print sum1/count, sum2/count, sum3/count, sum4/count}' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated))
+
+
+# Calculate limits (5 SD in this case) 
+limits=($(awk -F"\t" -v ancestry="EAS" -v k=5 -v mean1=${means[0]} -v mean2=${means[1]} -v mean3=${means[2]} -v mean4=${means[3]} '
+            $8==ancestry && NR>1 {count++; sum1=sum1+($3-mean1)^2;  sum2=sum2+($4-mean2)^2; sum3=sum3+($5-mean3)^2; sum4=sum4+($6-mean4)^2} 
+            END{print mean1-k*sqrt(sum1/(count-1)), mean1+k*sqrt(sum1/(count-1)), mean2-k*sqrt(sum2/(count-1)), mean2+k*sqrt(sum2/(count-1)), mean3-k*sqrt(sum3/(count-1)), mean3+k*sqrt(sum3/(count-1)), mean4-k*sqrt(sum4/(count-1)), mean4+k*sqrt(sum4/(count-1))}' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated))
+
+
+# Filter
+awk -F"\t" -v l1=${limits[0]} -v u1=${limits[1]} -v l2=${limits[2]} -v u2=${limits[3]} -v l3=${limits[4]} -v u3=${limits[5]} -v l4=${limits[6]} -v u4=${limits[7]}  \
+'$1=="0" || ($3>l1 && $3<u1 && $4>l2 && $4<u2 && $5>l3 && $5<u3 && $6>l4 && $6<u4) {print $1,$2,$3,$4,$5,$6}' OFS="\t" /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_EAS_1kG_HM3_PCs.eigenvec
+
+# Run command to annotate the new file
+awk -F"\t" 'BEGIN{OFS="\t";print "FID","IID","PC1","PC2","PC3","PC4","POP","SUPERPOP"} \
+NR==FNR{a[$1]=$4OFS$6;next} \
+$2 in a{print $0,a[$2];next} \
+!($1~"#"){print $0,"CATSLife","CATSLife"}' OFS="\t" igsr_samples.tsv /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_EAS_1kG_HM3_PCs.eigenvec > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_EAS_1kG_HM3_PCs.eigenvec.annotated
+
+#
+awk -F"\t" '$1!=0{print $1,$2}' OFS="\t" /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_EAS_1kG_HM3_PCs.eigenvec > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_EAS_FID_IID.txt
+
+
+####################################################################
+####################    SOUTH ASIAN ANCESTRY    ####################
+####################################################################
+
+AFR, SAS, AMR
+
+# Next run these commands to actually do it based on SDs
+means=($(awk -F"\t" -v ancestry="SAS" '$8==ancestry && NR>1 {count++; sum1=sum1+$3; sum2=sum2+$4; sum3=sum3+$5; sum4=sum4+$6}
+            END{print sum1/count, sum2/count, sum3/count, sum4/count}' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated))
+
+
+# Calculate limits (5 SD in this case) 
+limits=($(awk -F"\t" -v ancestry="SAS" -v k=5 -v mean1=${means[0]} -v mean2=${means[1]} -v mean3=${means[2]} -v mean4=${means[3]} '
+            $8==ancestry && NR>1 {count++; sum1=sum1+($3-mean1)^2;  sum2=sum2+($4-mean2)^2; sum3=sum3+($5-mean3)^2; sum4=sum4+($6-mean4)^2} 
+            END{print mean1-k*sqrt(sum1/(count-1)), mean1+k*sqrt(sum1/(count-1)), mean2-k*sqrt(sum2/(count-1)), mean2+k*sqrt(sum2/(count-1)), mean3-k*sqrt(sum3/(count-1)), mean3+k*sqrt(sum3/(count-1)), mean4-k*sqrt(sum4/(count-1)), mean4+k*sqrt(sum4/(count-1))}' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated))
+
+
+# Filter
+awk -F"\t" -v l1=${limits[0]} -v u1=${limits[1]} -v l2=${limits[2]} -v u2=${limits[3]} -v l3=${limits[4]} -v u3=${limits[5]} -v l4=${limits[6]} -v u4=${limits[7]}  \
+'$1=="0" || ($3>l1 && $3<u1 && $4>l2 && $4<u2 && $5>l3 && $5<u3 && $6>l4 && $6<u4) {print $1,$2,$3,$4,$5,$6}' OFS="\t" /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_SAS_1kG_HM3_PCs.eigenvec
+
+# Run command to annotate the new file
+awk -F"\t" 'BEGIN{OFS="\t";print "FID","IID","PC1","PC2","PC3","PC4","POP","SUPERPOP"} \
+NR==FNR{a[$1]=$4OFS$6;next} \
+$2 in a{print $0,a[$2];next} \
+!($1~"#"){print $0,"CATSLife","CATSLife"}' OFS="\t" igsr_samples.tsv /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_SAS_1kG_HM3_PCs.eigenvec > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_SAS_1kG_HM3_PCs.eigenvec.annotated
+
+#
+awk -F"\t" '$1!=0{print $1,$2}' OFS="\t" /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_SAS_1kG_HM3_PCs.eigenvec > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_SAS_FID_IID.txt
+
+
+##################################################################
+####################     AFRICAN ANCESTRY     ####################
+##################################################################
+
+# Next run these commands to actually do it based on SDs
+means=($(awk -F"\t" -v ancestry="AFR" '$8==ancestry && NR>1 {count++; sum1=sum1+$3; sum2=sum2+$4; sum3=sum3+$5; sum4=sum4+$6}
+            END{print sum1/count, sum2/count, sum3/count, sum4/count}' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated))
+
+
+# Calculate limits (5 SD in this case) 
+limits=($(awk -F"\t" -v ancestry="AFR" -v k=5 -v mean1=${means[0]} -v mean2=${means[1]} -v mean3=${means[2]} -v mean4=${means[3]} '
+            $8==ancestry && NR>1 {count++; sum1=sum1+($3-mean1)^2;  sum2=sum2+($4-mean2)^2; sum3=sum3+($5-mean3)^2; sum4=sum4+($6-mean4)^2} 
+            END{print mean1-k*sqrt(sum1/(count-1)), mean1+k*sqrt(sum1/(count-1)), mean2-k*sqrt(sum2/(count-1)), mean2+k*sqrt(sum2/(count-1)), mean3-k*sqrt(sum3/(count-1)), mean3+k*sqrt(sum3/(count-1)), mean4-k*sqrt(sum4/(count-1)), mean4+k*sqrt(sum4/(count-1))}' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated))
+
+
+# Filter
+awk -F"\t" -v l1=${limits[0]} -v u1=${limits[1]} -v l2=${limits[2]} -v u2=${limits[3]} -v l3=${limits[4]} -v u3=${limits[5]} -v l4=${limits[6]} -v u4=${limits[7]}  \
+'$1=="0" || ($3>l1 && $3<u1 && $4>l2 && $4<u2 && $5>l3 && $5<u3 && $6>l4 && $6<u4) {print $1,$2,$3,$4,$5,$6}' OFS="\t" /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_AFR_1kG_HM3_PCs.eigenvec
+
+# Run command to annotate the new file
+awk -F"\t" 'BEGIN{OFS="\t";print "FID","IID","PC1","PC2","PC3","PC4","POP","SUPERPOP"} \
+NR==FNR{a[$1]=$4OFS$6;next} \
+$2 in a{print $0,a[$2];next} \
+!($1~"#"){print $0,"CATSLife","CATSLife"}' OFS="\t" igsr_samples.tsv /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_AFR_1kG_HM3_PCs.eigenvec > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_AFR_1kG_HM3_PCs.eigenvec.annotated
+
+#
+awk -F"\t" '$1!=0{print $1,$2}' OFS="\t" /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_AFR_1kG_HM3_PCs.eigenvec > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_AFR_FID_IID.txt
+
+
+
+###################################################################
+####################     AMERICAN ANCESTRY     ####################
+###################################################################
+
+## appeared to grab too many people so I redid with 3 SD
+
+# Next run these commands to actually do it based on SDs
+means=($(awk -F"\t" -v ancestry="AMR" '$8==ancestry && NR>1 {count++; sum1=sum1+$3; sum2=sum2+$4; sum3=sum3+$5; sum4=sum4+$6}
+            END{print sum1/count, sum2/count, sum3/count, sum4/count}' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated))
+
+
+# Calculate limits (5 SD in this case) - CHANGED k=3
+limits=($(awk -F"\t" -v ancestry="AMR" -v k=5 -v mean1=${means[0]} -v mean2=${means[1]} -v mean3=${means[2]} -v mean4=${means[3]} '
+            $8==ancestry && NR>1 {count++; sum1=sum1+($3-mean1)^2;  sum2=sum2+($4-mean2)^2; sum3=sum3+($5-mean3)^2; sum4=sum4+($6-mean4)^2} 
+            END{print mean1-k*sqrt(sum1/(count-1)), mean1+k*sqrt(sum1/(count-1)), mean2-k*sqrt(sum2/(count-1)), mean2+k*sqrt(sum2/(count-1)), mean3-k*sqrt(sum3/(count-1)), mean3+k*sqrt(sum3/(count-1)), mean4-k*sqrt(sum4/(count-1)), mean4+k*sqrt(sum4/(count-1))}' /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated))
+
+
+# Filter
+awk -F"\t" -v l1=${limits[0]} -v u1=${limits[1]} -v l2=${limits[2]} -v u2=${limits[3]} -v l3=${limits[4]} -v u3=${limits[5]} -v l4=${limits[6]} -v u4=${limits[7]}  \
+'$1=="0" || ($3>l1 && $3<u1 && $4>l2 && $4<u2 && $5>l3 && $5<u3 && $6>l4 && $6<u4) {print $1,$2,$3,$4,$5,$6}' OFS="\t" /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_1kG_HM3_PCs.eigenvec.annotated > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_AMR_1kG_HM3_PCs.eigenvec
+
+# Run command to annotate the new file
+awk -F"\t" 'BEGIN{OFS="\t";print "FID","IID","PC1","PC2","PC3","PC4","POP","SUPERPOP"} \
+NR==FNR{a[$1]=$4OFS$6;next} \
+$2 in a{print $0,a[$2];next} \
+!($1~"#"){print $0,"CATSLife","CATSLife"}' OFS="\t" igsr_samples.tsv /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_AMR_1kG_HM3_PCs.eigenvec > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_AMR_1kG_HM3_PCs.eigenvec.annotated
+
+#
+awk -F"\t" '$1!=0{print $1,$2}' OFS="\t" /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_AMR_1kG_HM3_PCs.eigenvec > /pl/active/IBG/dang/CATSLife_PGSs/PC_ancestry/CATS_AMR_FID_IID.txt
+
+
+
+#######################################################################
+# Now plot them again - this time they should be clustered nicely    ##
+#     within the respective ancestry groups                          ##
+#######################################################################
