@@ -1,1 +1,10 @@
 README
+
+Updated: 11/27/2023
+
+This folder includes example scripts for PRScs, using both ABCD and CATSLife data. 
+Relevant files are located on the RC server.
+
+In most cases, you will be able to call PRScs from the existing directory inside Dan's 
+folder. However, some file paths will need to be updated to your directory
+(e.g., locations of the sumstats, etc.).
