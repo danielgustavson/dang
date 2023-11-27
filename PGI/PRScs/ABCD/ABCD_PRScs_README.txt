@@ -41,8 +41,8 @@ awk -F"\t" 'NR==1{print "SNP","A1","A2","BETA","P";next}{print $5,$4,$3,$9,$11}'
 
 #!/bin/bash
 #SBATCH --nodes=1
-#SBATCH --ntasks=25
-#SBATCH --time=0-23:00:00     # 1 day - 1 hrs
+#SBATCH --ntasks=10
+#SBATCH --time=0-12:00:00     # 12 hrs
 #SBATCH --output=ABCD_GCA.txt
 #SBATCH --job-name=PGS_GCA_ABCD
 
