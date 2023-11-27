@@ -1,1 +1,8 @@
 README
+
+This is a temporary file to help get people started with SBayesR. It is based off
+code from Chandra Reynolds, but some components were not needed to test SBayesR on 
+the EF summary statistics from Hatoum et al. (2023) in CATSLife.
+
+I will provide an updated file sometime soon, but please reach out if you need 
+help using SBayesR on CATSLife data in the meantime!
